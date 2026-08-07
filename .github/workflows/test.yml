@@ -1,0 +1,130 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write # test fixture branches are pushed and deleted by this workflow
+
+jobs:
+  shellcheck-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check script syntax
+        run: |
+          for f in scripts/*.sh test/*.sh test/lib/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+  functional:
+    needs: shellcheck-syntax
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Prisma 6 and 7 use different `prisma migrate diff` flags (see
+        # scripts/check-schema-drift.sh) and different datasource-config
+        # mechanisms (schema.prisma vs. prisma.config.ts). Every scenario
+        # runs against both to make sure the action keeps working across
+        # the full supported range (Prisma >= 6).
+        prisma-version: ['6', '7']
+        scenario:
+          - name: valid
+            base: clean
+            head: valid-head
+            expect: success
+          - name: pgfence-risk
+            base: clean
+            head: pgfence-risk-head
+            expect: failure
+          - name: schema-drift
+            base: clean
+            head: schema-drift-head
+            expect: failure
+          - name: invalid-migration-sql
+            base: clean
+            head: invalid-sql-head
+            expect: failure
+          - name: bad-seed
+            base: bad-seed-base
+            head: bad-seed-base # unreachable -- reset fails on the base branch's seed before head is ever checked out
+            expect: failure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Assembles this scenario's base/head fixtures and pushes each as its
+      # own throwaway branch, so the composite action below can be invoked
+      # exactly as a real pull request would: through real `actions/checkout`
+      # refs, not a reimplementation of its steps.
+      - name: Push fixture branches
+        id: fixtures
+        run: |
+          declare -A fixture=( [base]="${{ matrix.scenario.base }}" [head]="${{ matrix.scenario.head }}" )
+          for kind in base head; do
+            branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-$kind"
+            sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${fixture[$kind]}" "${{ matrix.prisma-version }}" "$branch")"
+            echo "${kind}_branch=$branch" >> "$GITHUB_OUTPUT"
+            # Heredoc form, not `echo "${kind}_sha=$sha"`: robust even if
+            # $sha ever ends up spanning multiple lines, which would
+            # otherwise corrupt $GITHUB_OUTPUT and fail every step reading
+            # from it.
+            {
+              echo "${kind}_sha<<PUSH_FIXTURE_SHA_EOF"
+              echo "$sha"
+              echo "PUSH_FIXTURE_SHA_EOF"
+            } >> "$GITHUB_OUTPUT"
+          done
+
+      # The action being tested, invoked exactly as a real pull request
+      # would trigger it: through real `actions/checkout` refs
+      # (base-ref/head-ref), not a reimplementation of its steps. It checks
+      # out base-ref, applies its migrations (and seed), checks out
+      # head-ref, analyzes and applies its migrations, then checks for
+      # schema drift -- starting and stopping its own disposable Postgres
+      # along the way. (action.yml stages its own scripts/*.sh to a temp
+      # dir up front so those checkouts overwriting the workspace -- which
+      # for `uses: ./` is the same directory the action's own files live in
+      # -- can't wipe them out before they're needed.)
+      #
+      # This step is expected to fail for some scenarios, so its failure is
+      # captured rather than failing the job outright.
+      - name: Run check-prisma action
+        id: run_action
+        continue-on-error: true
+        uses: ./
+        with:
+          path: .
+          max-risk: low
+          base-ref: ${{ steps.fixtures.outputs.base_sha }}
+          head-ref: ${{ steps.fixtures.outputs.head_sha }}
+
+      - name: Verify outcome matches expectation
+        run: |
+          actual="${{ steps.run_action.outcome }}"
+          expected="${{ matrix.scenario.expect }}"
+          echo "[${{ matrix.scenario.name }} (prisma ${{ matrix.prisma-version }})] action outcome: $actual (expected: $expected)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::expected the action to $expected, but it $actual"
+            exit 1
+          fi
+
+      # The action's own checkouts (base-ref, then head-ref) overwrite this
+      # job's workspace with fixture content, but leave its git metadata
+      # (the `origin` remote and persisted checkout credentials) intact --
+      # that's all `git push --delete` needs.
+      - name: Delete fixture branches
+        if: always()
+        run: |
+          git push --quiet origin --delete "refs/heads/${{ steps.fixtures.outputs.base_branch }}" 2>/dev/null || true
+          git push --quiet origin --delete "refs/heads/${{ steps.fixtures.outputs.head_branch }}" 2>/dev/null || true

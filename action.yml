@@ -27,6 +27,20 @@ inputs:
       low, medium, high, critical.
     required: false
     default: 'low'
+  base-ref:
+    description: >-
+      Git ref to check out as the base branch. Defaults to the pull
+      request's base commit. Mainly useful for testing this action outside
+      of a real pull request -- most callers should leave this unset.
+    required: false
+    default: ''
+  head-ref:
+    description: >-
+      Git ref to check out as the PR branch. Defaults to the pull request's
+      head commit. Mainly useful for testing this action outside of a real
+      pull request -- most callers should leave this unset.
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -41,6 +55,25 @@ runs:
             exit 1
             ;;
         esac
+
+    # actions/checkout doesn't just add/overwrite files -- it deletes the
+    # *entire* contents of its target directory first. The "Checkout base
+    # branch"/"Checkout PR branch" steps below target the job's default
+    # working directory, which for a locally-referenced action
+    # (`uses: ./`) is the *same* directory github.action_path resolves
+    # to -- so without this, those checkouts would wipe out this action's
+    # own scripts/*.sh before the steps below can run them. (For a
+    # normally-referenced action, e.g. `uses: kuech/check-prisma@v1`,
+    # github.action_path is already a separate directory those checkouts
+    # never touch, so this step is a harmless no-op copy there -- but
+    # nothing here should assume that's always true.)
+    - name: Stage scripts (survive base/head checkouts overwriting the workspace)
+      id: stage_scripts
+      shell: bash
+      run: |
+        dir="$(mktemp -d)"
+        cp -r "${{ github.action_path }}/scripts" "$dir/scripts"
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
     - name: Start PostgreSQL
       shell: bash
@@ -66,7 +99,7 @@ runs:
     - name: Checkout base branch
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.base.sha }}
+        ref: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -89,7 +122,7 @@ runs:
     - name: Apply migrations from base branch
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: npx prisma migrate reset --force
+      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/reset-database.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
@@ -97,7 +130,7 @@ runs:
     - name: Checkout PR branch
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ inputs.head-ref || github.event.pull_request.head.sha }}
 
     - name: Install dependencies (PR branch)
       shell: bash
@@ -107,14 +140,12 @@ runs:
     - name: Analyze migration risk
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: |
-        shopt -s globstar
-        npx @flvmnt/pgfence analyze --ci --max-risk ${{ inputs.max-risk }} prisma/migrations/**/migration.sql
+      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/analyze-risk.sh" "${{ inputs.max-risk }}"
 
     - name: Apply migrations from PR branch
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: npx prisma migrate deploy
+      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/deploy-migrations.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
@@ -122,11 +153,7 @@ runs:
     - name: Check for pending schema changes
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: |
-        npx prisma migrate diff \
-          --from-schema-datasource prisma/schema.prisma \
-          --to-schema-datamodel prisma/schema.prisma \
-          --exit-code
+      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/check-schema-drift.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
