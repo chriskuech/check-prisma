@@ -116,7 +116,7 @@ runs:
       working-directory: ${{ inputs.path }}
       run: |
         npx prisma migrate diff \
-          --from-schema-datamodel prisma/schema.prisma \
+          --from-schema prisma/schema.prisma \
           --to-url "$DATABASE_URL" \
           --exit-code
       env:
