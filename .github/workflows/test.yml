@@ -57,28 +57,7 @@ jobs:
             expect: failure
 
     steps:
-      # Checked out to a directory OUTSIDE GITHUB_WORKSPACE (a sibling of
-      # it), not `./` or a subdirectory of it. `uses:` doesn't accept
-      # dynamic expressions for the action reference (neither the `github`
-      # nor even the `env` context are recognized there -- it's resolved
-      # before those are available), which rules out pointing
-      # `uses: owner/repo@ref` at this commit. And a local path *inside*
-      # GITHUB_WORKSPACE doesn't survive either: actions/checkout deletes
-      # the *entire* contents of its target directory before checking out,
-      # and the action's own internal checkouts of base-ref/head-ref (which
-      # have no `path:` override) target GITHUB_WORKSPACE itself -- wiping
-      # out anything nested inside it, action-src included.
-      #
-      # A sibling directory one level up is outside that blast radius:
-      # `uses: ../action-src` (a genuine, if less common, path GitHub
-      # Actions supports -- see actions/checkout's `allow_parent_path`)
-      # keeps the action's own scripts/*.sh available no matter what the
-      # action's internal checkouts do inside GITHUB_WORKSPACE.
-      - name: Checkout action under test
-        uses: actions/checkout@v4
-        with:
-          path: ../action-src
-          allow_parent_path: true
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -92,7 +71,7 @@ jobs:
         id: base_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
-          sha="$(bash ../action-src/test/lib/push-fixture-branch.sh "../action-src/test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           # Heredoc form, not `echo "sha=$sha"`: robust even if $sha ever
           # ends up spanning multiple lines, which would otherwise corrupt
@@ -107,7 +86,7 @@ jobs:
         id: head_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
-          sha="$(bash ../action-src/test/lib/push-fixture-branch.sh "../action-src/test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           {
             echo "sha<<PUSH_FIXTURE_SHA_EOF"
@@ -115,18 +94,23 @@ jobs:
             echo "PUSH_FIXTURE_SHA_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # `path: .` is relative to the job's default working directory
-      # (GITHUB_WORKSPACE, where base-ref/head-ref land), not action-src.
-      # The action checks out base-ref, applies its migrations (and seed),
-      # checks out head-ref, analyzes and applies its migrations, then
-      # checks for schema drift -- starting and stopping its own disposable
-      # Postgres along the way. This step is expected to fail for some
-      # scenarios, so failures are captured rather than failing the job
-      # outright.
+      # The action being tested, invoked exactly as a real pull request
+      # would trigger it: through real `actions/checkout` refs
+      # (base-ref/head-ref), not a reimplementation of its steps. It checks
+      # out base-ref, applies its migrations (and seed), checks out
+      # head-ref, analyzes and applies its migrations, then checks for
+      # schema drift -- starting and stopping its own disposable Postgres
+      # along the way. (action.yml stages its own scripts/*.sh to a temp
+      # dir up front so those checkouts overwriting the workspace -- which
+      # for `uses: ./` is the same directory the action's own files live in
+      # -- can't wipe them out before they're needed.)
+      #
+      # This step is expected to fail for some scenarios, so its failure is
+      # captured rather than failing the job outright.
       - name: Run check-prisma action
         id: run_action
         continue-on-error: true
-        uses: ../action-src
+        uses: ./
         with:
           path: .
           max-risk: low
@@ -143,9 +127,12 @@ jobs:
             exit 1
           fi
 
+      # The action's own checkouts (base-ref, then head-ref) overwrite this
+      # job's workspace with fixture content, but leave its git metadata
+      # (the `origin` remote and persisted checkout credentials) intact --
+      # that's all `git push --delete` needs.
       - name: Delete fixture branches
         if: always()
         run: |
           git push --quiet origin --delete "refs/heads/${{ steps.base_fixture.outputs.branch }}" 2>/dev/null || true
           git push --quiet origin --delete "refs/heads/${{ steps.head_fixture.outputs.branch }}" 2>/dev/null || true
-        working-directory: ../action-src
