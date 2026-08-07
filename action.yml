@@ -80,12 +80,19 @@ runs:
       working-directory: ${{ inputs.path }}
       run: npm ci
 
+    # DIRECT_DATABASE_URL is set alongside DATABASE_URL because a schema
+    # with a `directUrl` datasource field (used to bypass a pooler for DDL,
+    # e.g. via pgbouncer in production) requires that env var to resolve for
+    # schema validation, even though this action's single ephemeral Postgres
+    # has no pooler for it to actually bypass. Harmless to set unconditionally
+    # for schemas that don't declare directUrl -- Prisma just ignores it.
     - name: Apply migrations from base branch
       shell: bash
       working-directory: ${{ inputs.path }}
       run: npx prisma migrate reset --force
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+        DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
     - name: Checkout PR branch
       uses: actions/checkout@v4
@@ -110,6 +117,7 @@ runs:
       run: npx prisma migrate deploy
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+        DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
     - name: Check for pending schema changes
       shell: bash
@@ -121,6 +129,7 @@ runs:
           --exit-code
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+        DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
     - name: Stop PostgreSQL
       if: always()
