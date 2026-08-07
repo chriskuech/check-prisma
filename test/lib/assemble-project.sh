@@ -43,5 +43,9 @@ cp -r "$fixture_dir/migrations" "$target_dir/prisma/migrations"
 if [ -n "$shared_node_modules" ]; then
   ln -s "$shared_node_modules" "$target_dir/node_modules"
 else
-  (cd "$target_dir" && npm install --no-audit --no-fund --loglevel=error)
+  # Redirect stdout, not just --loglevel: npm's "added N packages" summary
+  # prints regardless of log level, and callers (push-fixture-branch.sh)
+  # capture this script's stdout as a value, which that summary line would
+  # corrupt.
+  (cd "$target_dir" && npm install --no-audit --no-fund --loglevel=error >/dev/null)
 fi

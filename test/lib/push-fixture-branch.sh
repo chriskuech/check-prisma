@@ -32,10 +32,15 @@ trap cleanup EXIT
 # Assemble in a scratch dir first -- assemble-project.sh wipes its target
 # directory, which would destroy the worktree's .git pointer if assembled
 # directly into it.
-"$repo_root/test/lib/assemble-project.sh" "$fixture_dir" "$version" "$staging_dir"
+#
+# Everything below is redirected to stderr/devnull: this script's only
+# stdout output is the final `rev-parse`, since callers capture stdout as
+# a value (`sha="$(push-fixture-branch.sh ...)"`), and any stray stdout
+# line -- git's or a tool it shells out to -- would corrupt that capture.
+"$repo_root/test/lib/assemble-project.sh" "$fixture_dir" "$version" "$staging_dir" 1>&2
 
-git -C "$repo_root" worktree add --detach --quiet "$worktree_dir" >/dev/null
-git -C "$worktree_dir" checkout --quiet --orphan "$branch"
+git -C "$repo_root" worktree add --detach --quiet "$worktree_dir" 1>&2
+git -C "$worktree_dir" checkout --quiet --orphan "$branch" 1>&2
 git -C "$worktree_dir" rm -rf --quiet . >/dev/null 2>&1 || true
 find "$worktree_dir" -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
 
@@ -51,7 +56,7 @@ git \
   -C "$worktree_dir" \
   -c user.name="check-prisma-test-fixtures" \
   -c user.email="actions@users.noreply.github.com" \
-  commit --quiet -m "test fixture: $branch"
+  commit --quiet -m "test fixture: $branch" 1>&2
 
-git -C "$worktree_dir" push --force --quiet origin "HEAD:refs/heads/$branch"
+git -C "$worktree_dir" push --force --quiet origin "HEAD:refs/heads/$branch" 1>&2
 git -C "$worktree_dir" rev-parse HEAD

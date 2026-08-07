@@ -73,7 +73,14 @@ jobs:
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
           sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          # Heredoc form, not `echo "sha=$sha"`: robust even if $sha ever
+          # ends up spanning multiple lines, which would otherwise corrupt
+          # $GITHUB_OUTPUT and fail every step reading from it.
+          {
+            echo "sha<<PUSH_FIXTURE_SHA_EOF"
+            echo "$sha"
+            echo "PUSH_FIXTURE_SHA_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Push head fixture branch
         id: head_fixture
@@ -81,7 +88,11 @@ jobs:
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
           sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "sha<<PUSH_FIXTURE_SHA_EOF"
+            echo "$sha"
+            echo "PUSH_FIXTURE_SHA_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       # The action being tested. It checks out base-ref, applies its
       # migrations (and seed), checks out head-ref, analyzes and applies
