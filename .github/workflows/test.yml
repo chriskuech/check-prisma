@@ -56,6 +56,15 @@ jobs:
             head: bad-seed-base # unreachable -- reset fails on the base branch's seed before head is ever checked out
             expect: failure
 
+    env:
+      # `uses:` doesn't allow the `github` context directly ("Unrecognized
+      # named-value: 'github'") -- a deliberate restriction, since `uses:`
+      # determines what code runs and github.event.* carries data an
+      # attacker can influence (e.g. a PR title). Routing it through `env:`
+      # (evaluated in the job's own normal context, which does allow
+      # `github`) is the standard workaround.
+      action_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -111,7 +120,7 @@ jobs:
       - name: Run check-prisma action
         id: run_action
         continue-on-error: true
-        uses: chriskuech/check-prisma@${{ github.event.pull_request.head.sha || github.sha }}
+        uses: chriskuech/check-prisma@${{ env.action_ref }}
         with:
           path: .
           max-risk: low
