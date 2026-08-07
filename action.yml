@@ -117,7 +117,7 @@ runs:
       run: |
         npx prisma migrate diff \
           --from-schema prisma/schema.prisma \
-          --to-url "$DATABASE_URL" \
+          --to-config-datasource \
           --exit-code
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
