@@ -1,0 +1,128 @@
+name: 'Check Prisma Migrations'
+description: >-
+  Validates Prisma migrations for an npm project by resetting the database
+  to the pull request's base branch, applying the base branch's migrations,
+  then applying the pull request's migrations and checking that no pending
+  schema changes remain.
+author: 'Chris Kuech'
+
+branding:
+  icon: 'database'
+  color: 'purple'
+
+inputs:
+  path:
+    description: >-
+      Path to the npm project root, relative to the repository root. Must
+      contain package.json and a prisma/schema.prisma file.
+    required: false
+    default: '.'
+  node-version:
+    description: 'Node.js version to use.'
+    required: false
+    default: '22'
+  max-risk:
+    description: >-
+      Maximum migration risk level to allow, as assessed by pgfence. One of:
+      low, medium, high, critical.
+    required: false
+    default: 'low'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate max-risk input
+      shell: bash
+      run: |
+        case "${{ inputs.max-risk }}" in
+          low|medium|high|critical) ;;
+          *)
+            echo "::error::Invalid max-risk '${{ inputs.max-risk }}'. Must be one of: low, medium, high, critical." >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Start PostgreSQL
+      shell: bash
+      run: |
+        docker run -d --name check-prisma-postgres \
+          -e POSTGRES_USER=postgres \
+          -e POSTGRES_PASSWORD=postgres \
+          -e POSTGRES_DB=test \
+          -p 5432:5432 \
+          pgvector/pgvector:pg17
+
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in $(seq 1 30); do
+          if docker exec check-prisma-postgres pg_isready -U postgres > /dev/null 2>&1; then
+            echo "PostgreSQL is ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "PostgreSQL did not become ready in time" >&2
+        exit 1
+
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.path }}/package-lock.json
+
+    - name: Install dependencies (base branch)
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: npm ci
+
+    - name: Apply migrations from base branch
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: npx prisma migrate reset --force
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Install dependencies (PR branch)
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: npm ci
+
+    - name: Analyze migration risk
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        shopt -s globstar
+        npx @flvmnt/pgfence analyze --ci --max-risk ${{ inputs.max-risk }} prisma/migrations/**/migration.sql
+
+    - name: Apply migrations from PR branch
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: npx prisma migrate deploy
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+
+    - name: Check for pending schema changes
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        npx prisma migrate diff \
+          --from-schema-datamodel prisma/schema.prisma \
+          --to-url "$DATABASE_URL" \
+          --exit-code
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+
+    - name: Stop PostgreSQL
+      if: always()
+      shell: bash
+      run: docker rm -f check-prisma-postgres
