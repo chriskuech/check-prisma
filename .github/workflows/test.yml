@@ -56,17 +56,29 @@ jobs:
             head: bad-seed-base # unreachable -- reset fails on the base branch's seed before head is ever checked out
             expect: failure
 
-    env:
-      # `uses:` doesn't allow the `github` context directly ("Unrecognized
-      # named-value: 'github'") -- a deliberate restriction, since `uses:`
-      # determines what code runs and github.event.* carries data an
-      # attacker can influence (e.g. a PR title). Routing it through `env:`
-      # (evaluated in the job's own normal context, which does allow
-      # `github`) is the standard workaround.
-      action_ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
     steps:
-      - uses: actions/checkout@v4
+      # Checked out to a directory OUTSIDE GITHUB_WORKSPACE (a sibling of
+      # it), not `./` or a subdirectory of it. `uses:` doesn't accept
+      # dynamic expressions for the action reference (neither the `github`
+      # nor even the `env` context are recognized there -- it's resolved
+      # before those are available), which rules out pointing
+      # `uses: owner/repo@ref` at this commit. And a local path *inside*
+      # GITHUB_WORKSPACE doesn't survive either: actions/checkout deletes
+      # the *entire* contents of its target directory before checking out,
+      # and the action's own internal checkouts of base-ref/head-ref (which
+      # have no `path:` override) target GITHUB_WORKSPACE itself -- wiping
+      # out anything nested inside it, action-src included.
+      #
+      # A sibling directory one level up is outside that blast radius:
+      # `uses: ../action-src` (a genuine, if less common, path GitHub
+      # Actions supports -- see actions/checkout's `allow_parent_path`)
+      # keeps the action's own scripts/*.sh available no matter what the
+      # action's internal checkouts do inside GITHUB_WORKSPACE.
+      - name: Checkout action under test
+        uses: actions/checkout@v4
+        with:
+          path: ../action-src
+          allow_parent_path: true
 
       - uses: actions/setup-node@v4
         with:
@@ -80,7 +92,7 @@ jobs:
         id: base_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash ../action-src/test/lib/push-fixture-branch.sh "../action-src/test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           # Heredoc form, not `echo "sha=$sha"`: robust even if $sha ever
           # ends up spanning multiple lines, which would otherwise corrupt
@@ -95,7 +107,7 @@ jobs:
         id: head_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash ../action-src/test/lib/push-fixture-branch.sh "../action-src/test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           {
             echo "sha<<PUSH_FIXTURE_SHA_EOF"
@@ -103,24 +115,18 @@ jobs:
             echo "PUSH_FIXTURE_SHA_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # The action being tested, referenced the same way a real consumer
-      # would (`uses: owner/repo@ref`), just pointed at this commit instead
-      # of a release tag. This -- not `uses: ./` -- is what makes
-      # github.action_path resolve to Actions' own isolated checkout of the
-      # action (under _actions/, never touched by any actions/checkout step
-      # targeting GITHUB_WORKSPACE), matching real-world behavior: the
-      # action's own internal checkouts of base-ref/head-ref land in
-      # GITHUB_WORKSPACE and can't overwrite the scripts/*.sh it needs to
-      # run afterward. `uses: ./` (or a local `path:` subdirectory of the
-      # same workspace) can't get this right, because GITHUB_WORKSPACE is
-      # exactly what those checkouts overwrite.
-      #
-      # This step is expected to fail for some scenarios, so its failure is
-      # captured rather than failing the job outright.
+      # `path: .` is relative to the job's default working directory
+      # (GITHUB_WORKSPACE, where base-ref/head-ref land), not action-src.
+      # The action checks out base-ref, applies its migrations (and seed),
+      # checks out head-ref, analyzes and applies its migrations, then
+      # checks for schema drift -- starting and stopping its own disposable
+      # Postgres along the way. This step is expected to fail for some
+      # scenarios, so failures are captured rather than failing the job
+      # outright.
       - name: Run check-prisma action
         id: run_action
         continue-on-error: true
-        uses: chriskuech/check-prisma@${{ env.action_ref }}
+        uses: ../action-src
         with:
           path: .
           max-risk: low
@@ -137,12 +143,9 @@ jobs:
             exit 1
           fi
 
-      # The action's own checkouts (base-ref, then head-ref) overwrite this
-      # job's workspace with fixture content, but leave its git metadata
-      # (the `origin` remote and persisted checkout credentials) intact --
-      # that's all `git push --delete` needs.
       - name: Delete fixture branches
         if: always()
         run: |
           git push --quiet origin --delete "refs/heads/${{ steps.base_fixture.outputs.branch }}" 2>/dev/null || true
           git push --quiet origin --delete "refs/heads/${{ steps.head_fixture.outputs.branch }}" 2>/dev/null || true
+        working-directory: ../action-src
