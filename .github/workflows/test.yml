@@ -57,7 +57,19 @@ jobs:
             expect: failure
 
     steps:
+      # Checked out to its own subdirectory, NOT the job's default working
+      # directory: `uses: ./action-src` below makes github.action_path
+      # resolve there, so when the action's own `actions/checkout` steps
+      # check out base-ref/head-ref to the (separate) default working
+      # directory, they don't overwrite the action's own scripts/*.sh out
+      # from under it. This is what makes `uses: ./action-src` behave like
+      # a real `uses: kuech/check-prisma@v1` (which Actions also runs from
+      # a directory the job's own checkouts never touch), instead of like
+      # `uses: ./`, which puts action_path and the checkout target in the
+      # same place and breaks exactly this way.
       - uses: actions/checkout@v4
+        with:
+          path: action-src
 
       - uses: actions/setup-node@v4
         with:
@@ -71,7 +83,7 @@ jobs:
         id: base_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash action-src/test/lib/push-fixture-branch.sh "action-src/test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           # Heredoc form, not `echo "sha=$sha"`: robust even if $sha ever
           # ends up spanning multiple lines, which would otherwise corrupt
@@ -86,7 +98,7 @@ jobs:
         id: head_fixture
         run: |
           branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
+          sha="$(bash action-src/test/lib/push-fixture-branch.sh "action-src/test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           {
             echo "sha<<PUSH_FIXTURE_SHA_EOF"
@@ -94,16 +106,17 @@ jobs:
             echo "PUSH_FIXTURE_SHA_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # The action being tested. It checks out base-ref, applies its
-      # migrations (and seed), checks out head-ref, analyzes and applies
-      # its migrations, then checks for schema drift -- starting and
-      # stopping its own disposable Postgres along the way. This step is
-      # expected to fail for some scenarios, so failures are captured
-      # rather than failing the job outright.
+      # The action being tested. `path: .` is relative to the job's default
+      # working directory (where base-ref/head-ref land), not action-src.
+      # It checks out base-ref, applies its migrations (and seed), checks
+      # out head-ref, analyzes and applies its migrations, then checks for
+      # schema drift -- starting and stopping its own disposable Postgres
+      # along the way. This step is expected to fail for some scenarios, so
+      # failures are captured rather than failing the job outright.
       - name: Run check-prisma action
         id: run_action
         continue-on-error: true
-        uses: ./
+        uses: ./action-src
         with:
           path: .
           max-risk: low
@@ -120,12 +133,9 @@ jobs:
             exit 1
           fi
 
-      # The action's own checkouts (base-ref, then head-ref) overwrite this
-      # job's workspace, so this step can no longer rely on repo files
-      # (e.g. test/lib/*.sh) being present -- only plain git commands
-      # against the still-configured `origin` remote.
       - name: Delete fixture branches
         if: always()
         run: |
           git push --quiet origin --delete "refs/heads/${{ steps.base_fixture.outputs.branch }}" 2>/dev/null || true
           git push --quiet origin --delete "refs/heads/${{ steps.head_fixture.outputs.branch }}" 2>/dev/null || true
+        working-directory: action-src
