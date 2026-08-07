@@ -27,6 +27,20 @@ inputs:
       low, medium, high, critical.
     required: false
     default: 'low'
+  base-ref:
+    description: >-
+      Git ref to check out as the base branch. Defaults to the pull
+      request's base commit. Mainly useful for testing this action outside
+      of a real pull request -- most callers should leave this unset.
+    required: false
+    default: ''
+  head-ref:
+    description: >-
+      Git ref to check out as the PR branch. Defaults to the pull request's
+      head commit. Mainly useful for testing this action outside of a real
+      pull request -- most callers should leave this unset.
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -66,7 +80,7 @@ runs:
     - name: Checkout base branch
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.base.sha }}
+        ref: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -97,7 +111,7 @@ runs:
     - name: Checkout PR branch
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ inputs.head-ref || github.event.pull_request.head.sha }}
 
     - name: Install dependencies (PR branch)
       shell: bash

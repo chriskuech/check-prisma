@@ -15,6 +15,8 @@ This GitHub Action validates Prisma migrations in pull requests by:
 | `path`         | Path to the npm project root, relative to the repository root. Must contain `package.json` and `prisma/schema.prisma`. | No       | `.`     |
 | `node-version` | Node.js version to use.                                                                                                   | No       | `22`    |
 | `max-risk`     | Maximum migration risk level allowed by pgfence. One of: `low`, `medium`, `high`, `critical`.                            | No       | `low`   |
+| `base-ref`     | Git ref to check out as the base branch, instead of the pull request's base commit. Mainly for testing this action itself; most callers should leave this unset. | No       | (PR base commit) |
+| `head-ref`     | Git ref to check out as the PR branch, instead of the pull request's head commit. Mainly for testing this action itself; most callers should leave this unset. | No       | (PR head commit) |
 
 ## Usage
 
@@ -63,9 +65,9 @@ version and uses the right ones -- see `scripts/check-schema-drift.sh`.
 
 ## Development
 
-The action's logic lives in `scripts/*.sh` so it can be exercised directly
-in tests, not just through a real pull request. See
+The action's logic lives in `scripts/*.sh`, called from `action.yml`. See
 [`test/README.md`](test/README.md) for the functional test suite, which
-runs every scenario (valid migrations, pgfence risk, schema drift, a broken
-migration, a broken seed script) against a real Postgres database and a
-real Prisma CLI, for every supported Prisma major version.
+invokes the action itself (`uses: ./`) against real, pushed fixture
+branches, a real Postgres database, and a real Prisma CLI -- covering valid
+migrations, pgfence risk, schema drift, a broken migration, and a broken
+seed script, for every supported Prisma major version.

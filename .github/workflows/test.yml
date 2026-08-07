@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # test fixture branches are pushed and deleted by this workflow
 
 jobs:
   shellcheck-syntax:
@@ -34,21 +34,27 @@ jobs:
         # runs against both to make sure the action keeps working across
         # the full supported range (Prisma >= 6).
         prisma-version: ['6', '7']
-
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+        scenario:
+          - name: valid
+            base: clean
+            head: valid-head
+            expect: success
+          - name: pgfence-risk
+            base: clean
+            head: pgfence-risk-head
+            expect: failure
+          - name: schema-drift
+            base: clean
+            head: schema-drift-head
+            expect: failure
+          - name: invalid-migration-sql
+            base: clean
+            head: invalid-sql-head
+            expect: failure
+          - name: bad-seed
+            base: bad-seed-base
+            head: bad-seed-base # unreachable -- reset fails on the base branch's seed before head is ever checked out
+            expect: failure
 
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +63,58 @@ jobs:
         with:
           node-version: 22
 
-      - name: Run functional tests (prisma ${{ matrix.prisma-version }})
-        run: bash test/run-all.sh ${{ matrix.prisma-version }}
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
-          DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+      # Assembles this scenario's base/head fixtures and pushes each as its
+      # own throwaway branch, so the composite action below can be invoked
+      # exactly as a real pull request would: through real `actions/checkout`
+      # refs, not a reimplementation of its steps.
+      - name: Push base fixture branch
+        id: base_fixture
+        run: |
+          branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
+          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Push head fixture branch
+        id: head_fixture
+        run: |
+          branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
+          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # The action being tested. It checks out base-ref, applies its
+      # migrations (and seed), checks out head-ref, analyzes and applies
+      # its migrations, then checks for schema drift -- starting and
+      # stopping its own disposable Postgres along the way. This step is
+      # expected to fail for some scenarios, so failures are captured
+      # rather than failing the job outright.
+      - name: Run check-prisma action
+        id: run_action
+        continue-on-error: true
+        uses: ./
+        with:
+          path: .
+          max-risk: low
+          base-ref: ${{ steps.base_fixture.outputs.sha }}
+          head-ref: ${{ steps.head_fixture.outputs.sha }}
+
+      - name: Verify outcome matches expectation
+        run: |
+          actual="${{ steps.run_action.outcome }}"
+          expected="${{ matrix.scenario.expect }}"
+          echo "[${{ matrix.scenario.name }} (prisma ${{ matrix.prisma-version }})] action outcome: $actual (expected: $expected)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::expected the action to $expected, but it $actual"
+            exit 1
+          fi
+
+      # The action's own checkouts (base-ref, then head-ref) overwrite this
+      # job's workspace, so this step can no longer rely on repo files
+      # (e.g. test/lib/*.sh) being present -- only plain git commands
+      # against the still-configured `origin` remote.
+      - name: Delete fixture branches
+        if: always()
+        run: |
+          git push --quiet origin --delete "refs/heads/${{ steps.base_fixture.outputs.branch }}" 2>/dev/null || true
+          git push --quiet origin --delete "refs/heads/${{ steps.head_fixture.outputs.branch }}" 2>/dev/null || true
