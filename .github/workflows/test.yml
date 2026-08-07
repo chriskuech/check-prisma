@@ -67,32 +67,24 @@ jobs:
       # own throwaway branch, so the composite action below can be invoked
       # exactly as a real pull request would: through real `actions/checkout`
       # refs, not a reimplementation of its steps.
-      - name: Push base fixture branch
-        id: base_fixture
+      - name: Push fixture branches
+        id: fixtures
         run: |
-          branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-base"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.base }}" "${{ matrix.prisma-version }}" "$branch")"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          # Heredoc form, not `echo "sha=$sha"`: robust even if $sha ever
-          # ends up spanning multiple lines, which would otherwise corrupt
-          # $GITHUB_OUTPUT and fail every step reading from it.
-          {
-            echo "sha<<PUSH_FIXTURE_SHA_EOF"
-            echo "$sha"
-            echo "PUSH_FIXTURE_SHA_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Push head fixture branch
-        id: head_fixture
-        run: |
-          branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-head"
-          sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${{ matrix.scenario.head }}" "${{ matrix.prisma-version }}" "$branch")"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          {
-            echo "sha<<PUSH_FIXTURE_SHA_EOF"
-            echo "$sha"
-            echo "PUSH_FIXTURE_SHA_EOF"
-          } >> "$GITHUB_OUTPUT"
+          declare -A fixture=( [base]="${{ matrix.scenario.base }}" [head]="${{ matrix.scenario.head }}" )
+          for kind in base head; do
+            branch="test-fixtures/${{ github.run_id }}-${{ matrix.prisma-version }}-${{ matrix.scenario.name }}-$kind"
+            sha="$(bash test/lib/push-fixture-branch.sh "test/fixtures/scenarios/${fixture[$kind]}" "${{ matrix.prisma-version }}" "$branch")"
+            echo "${kind}_branch=$branch" >> "$GITHUB_OUTPUT"
+            # Heredoc form, not `echo "${kind}_sha=$sha"`: robust even if
+            # $sha ever ends up spanning multiple lines, which would
+            # otherwise corrupt $GITHUB_OUTPUT and fail every step reading
+            # from it.
+            {
+              echo "${kind}_sha<<PUSH_FIXTURE_SHA_EOF"
+              echo "$sha"
+              echo "PUSH_FIXTURE_SHA_EOF"
+            } >> "$GITHUB_OUTPUT"
+          done
 
       # The action being tested, invoked exactly as a real pull request
       # would trigger it: through real `actions/checkout` refs
@@ -114,8 +106,8 @@ jobs:
         with:
           path: .
           max-risk: low
-          base-ref: ${{ steps.base_fixture.outputs.sha }}
-          head-ref: ${{ steps.head_fixture.outputs.sha }}
+          base-ref: ${{ steps.fixtures.outputs.base_sha }}
+          head-ref: ${{ steps.fixtures.outputs.head_sha }}
 
       - name: Verify outcome matches expectation
         run: |
@@ -134,5 +126,5 @@ jobs:
       - name: Delete fixture branches
         if: always()
         run: |
-          git push --quiet origin --delete "refs/heads/${{ steps.base_fixture.outputs.branch }}" 2>/dev/null || true
-          git push --quiet origin --delete "refs/heads/${{ steps.head_fixture.outputs.branch }}" 2>/dev/null || true
+          git push --quiet origin --delete "refs/heads/${{ steps.fixtures.outputs.base_branch }}" 2>/dev/null || true
+          git push --quiet origin --delete "refs/heads/${{ steps.fixtures.outputs.head_branch }}" 2>/dev/null || true
