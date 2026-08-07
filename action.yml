@@ -124,8 +124,8 @@ runs:
       working-directory: ${{ inputs.path }}
       run: |
         npx prisma migrate diff \
-          --from-schema prisma/schema.prisma \
-          --to-config-datasource \
+          --from-schema-datasource prisma/schema.prisma \
+          --to-schema-datamodel prisma/schema.prisma \
           --exit-code
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
