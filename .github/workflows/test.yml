@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check script syntax
+        run: |
+          for f in scripts/*.sh test/*.sh test/lib/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+  functional:
+    needs: shellcheck-syntax
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Prisma 6 and 7 use different `prisma migrate diff` flags (see
+        # scripts/check-schema-drift.sh) and different datasource-config
+        # mechanisms (schema.prisma vs. prisma.config.ts). Every scenario
+        # runs against both to make sure the action keeps working across
+        # the full supported range (Prisma >= 6).
+        prisma-version: ['6', '7']
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run functional tests (prisma ${{ matrix.prisma-version }})
+        run: bash test/run-all.sh ${{ matrix.prisma-version }}
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+          DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test

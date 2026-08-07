@@ -89,7 +89,7 @@ runs:
     - name: Apply migrations from base branch
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: npx prisma migrate reset --force
+      run: bash "${{ github.action_path }}/scripts/reset-database.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
@@ -107,14 +107,12 @@ runs:
     - name: Analyze migration risk
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: |
-        shopt -s globstar
-        npx @flvmnt/pgfence analyze --ci --max-risk ${{ inputs.max-risk }} prisma/migrations/**/migration.sql
+      run: bash "${{ github.action_path }}/scripts/analyze-risk.sh" "${{ inputs.max-risk }}"
 
     - name: Apply migrations from PR branch
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: npx prisma migrate deploy
+      run: bash "${{ github.action_path }}/scripts/deploy-migrations.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
@@ -122,11 +120,7 @@ runs:
     - name: Check for pending schema changes
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: |
-        npx prisma migrate diff \
-          --from-schema-datasource prisma/schema.prisma \
-          --to-schema-datamodel prisma/schema.prisma \
-          --exit-code
+      run: bash "${{ github.action_path }}/scripts/check-schema-drift.sh"
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test

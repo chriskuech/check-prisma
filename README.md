@@ -51,3 +51,21 @@ For a monorepo with the Prisma project in a subdirectory:
         with:
           path: packages/db
 ```
+
+## Prisma version support
+
+Supports Prisma >= 6, including both the classic `package.json`-based
+config and the `prisma.config.ts` config Prisma 7 requires. The CLI flags
+for detecting pending schema changes differ between major versions (Prisma
+7 removed `--from-schema-datasource`/`--to-schema-datamodel` in favor of
+`--from-config-datasource`/`--to-schema`); the action detects the installed
+version and uses the right ones -- see `scripts/check-schema-drift.sh`.
+
+## Development
+
+The action's logic lives in `scripts/*.sh` so it can be exercised directly
+in tests, not just through a real pull request. See
+[`test/README.md`](test/README.md) for the functional test suite, which
+runs every scenario (valid migrations, pgfence risk, schema drift, a broken
+migration, a broken seed script) against a real Postgres database and a
+real Prisma CLI, for every supported Prisma major version.
