@@ -29,7 +29,8 @@ matrix:
 | Scenario                 | Action run is expected to |
 | ------------------------- | -------------------------- |
 | `valid`                    | succeed |
-| `pgfence-risk`              | fail (pgfence flags the PR's migration) |
+| `pgfence-risk`              | fail (pgfence flags the PR's own new migration) |
+| `historical-risk`            | succeed (the base branch already has a migration pgfence would flag, but the PR's own new migration is clean -- pgfence only ever analyzes migrations new to the PR, never re-analyzes ones already on the base branch) |
 | `schema-drift`               | fail (schema.prisma has a change no migration covers) |
 | `invalid-migration-sql`      | fail (the PR's latest migration SQL errors when applied) |
 | `bad-seed`                     | fail (the base branch's seed script errors) |
