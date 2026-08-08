@@ -127,6 +127,23 @@ runs:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
+    # Snapshotted before the "Checkout PR branch" step below overwrites the
+    # workspace -- analyze-risk.sh needs base's own set of migration folder
+    # names to tell which of the PR branch's migrations are new, and this is
+    # the last point base's checkout is still on disk. Lands next to the
+    # staged scripts (same tmpdir, same reason: survives being overwritten).
+    - name: Snapshot base branch migrations (for diff-scoped risk analysis)
+      id: snapshot_base_migrations
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        dir="${{ steps.stage_scripts.outputs.dir }}/base-migrations"
+        mkdir -p "$dir"
+        if [ -d prisma/migrations ]; then
+          cp -r prisma/migrations/. "$dir/"
+        fi
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
     - name: Checkout PR branch
       uses: actions/checkout@v4
       with:
@@ -140,7 +157,7 @@ runs:
     - name: Analyze migration risk
       shell: bash
       working-directory: ${{ inputs.path }}
-      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/analyze-risk.sh" "${{ inputs.max-risk }}"
+      run: bash "${{ steps.stage_scripts.outputs.dir }}/scripts/analyze-risk.sh" "${{ inputs.max-risk }}" "${{ steps.snapshot_base_migrations.outputs.dir }}"
 
     - name: Apply migrations from PR branch
       shell: bash

@@ -12,7 +12,7 @@ set -uo pipefail
 version="${1:?usage: run-all.sh <prisma-major>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-scenarios=(valid pgfence-risk schema-drift invalid-migration-sql bad-seed)
+scenarios=(valid pgfence-risk historical-risk schema-drift invalid-migration-sql bad-seed)
 
 install_dir="$(mktemp -d)"
 trap 'rm -rf "$install_dir"' EXIT

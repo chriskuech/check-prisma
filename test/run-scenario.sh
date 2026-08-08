@@ -8,7 +8,10 @@
 #
 # Scenarios:
 #   valid                   -- base and head are both well-formed; everything succeeds
-#   pgfence-risk            -- the PR's migration is flagged by pgfence
+#   pgfence-risk            -- the PR's own new migration is flagged by pgfence
+#   historical-risk         -- base already has a migration pgfence would flag, but the
+#                              PR's own new migration is clean; the base one is never
+#                              re-analyzed, so this succeeds
 #   schema-drift            -- applied migrations don't match schema.prisma
 #   invalid-migration-sql   -- the PR's latest migration SQL errors when applied
 #   bad-seed                -- the base branch's seed script errors
@@ -31,11 +34,12 @@ export DIRECT_DATABASE_URL="${DIRECT_DATABASE_URL:-$DATABASE_URL}"
 max_risk="${MAX_RISK:-low}"
 
 case "$scenario" in
-  valid)                  base=clean          head=valid-head        expect_fail=none ;;
-  pgfence-risk)            base=clean          head=pgfence-risk-head  expect_fail=analyze ;;
-  schema-drift)             base=clean          head=schema-drift-head  expect_fail=drift ;;
-  invalid-migration-sql)    base=clean          head=invalid-sql-head   expect_fail=deploy ;;
-  bad-seed)                  base=bad-seed-base  head=""                  expect_fail=reset ;;
+  valid)                  base=clean          head=valid-head            expect_fail=none ;;
+  pgfence-risk)            base=clean          head=pgfence-risk-head      expect_fail=analyze ;;
+  historical-risk)          base=dirty-base      head=historical-risk-head  expect_fail=none ;;
+  schema-drift)              base=clean          head=schema-drift-head      expect_fail=drift ;;
+  invalid-migration-sql)     base=clean          head=invalid-sql-head       expect_fail=deploy ;;
+  bad-seed)                   base=bad-seed-base  head=""                      expect_fail=reset ;;
   *)
     echo "run-scenario: unknown scenario '$scenario'" >&2
     exit 2
@@ -79,7 +83,7 @@ fi
 # --- PR branch: analyze migration risk, then apply on top of base state ---
 "$repo_root/test/lib/assemble-project.sh" "$fixtures_dir/$head" "$version" "$work_dir/head" "$shared_node_modules"
 
-(cd "$work_dir/head" && run_step "analyze-risk" bash "$scripts_dir/analyze-risk.sh" "$max_risk")
+(cd "$work_dir/head" && run_step "analyze-risk" bash "$scripts_dir/analyze-risk.sh" "$max_risk" "$work_dir/base/prisma/migrations")
 analyze_rc=$?
 if [ "$expect_fail" = "analyze" ]; then
   [ "$analyze_rc" -ne 0 ] && pass "analyze-risk failed as expected (unsafe migration)"

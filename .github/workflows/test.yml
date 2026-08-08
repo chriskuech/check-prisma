@@ -43,6 +43,10 @@ jobs:
             base: clean
             head: pgfence-risk-head
             expect: failure
+          - name: historical-risk
+            base: dirty-base
+            head: historical-risk-head
+            expect: success
           - name: schema-drift
             base: clean
             head: schema-drift-head
